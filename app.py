@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Fungsi untuk memuat data
+# Fungsi untuk memuat data dan membersihkan missing value
 @st.cache_data
 def load_data():
     df = pd.read_csv("StudentPerformanceFactors.csv")
@@ -32,6 +32,31 @@ except FileNotFoundError:
 # Navigasi Menu
 st.sidebar.title("Navigasi Proyek")
 page = st.sidebar.radio("Pilih Halaman:", ["Dashboard & Analisis Data", "Form Input Data Baru"])
+
+# ====================================================================
+# PROSES PRE-TRAINING (GLOBAL) AGAR ENCODER KONSISTEN
+# ====================================================================
+if data_loaded:
+    @st.cache_resource
+    def train_and_prepare_model(df):
+        # Salin dataframe agar tidak merusak data asli
+        X = df.drop(columns=['Exam_Score'])
+        y = df['Exam_Score']
+        
+        le_dict = {}
+        # Melatih LabelEncoder pada data teks asli secara permanen
+        for col in X.select_dtypes(include=['object']).columns:
+            le = LabelEncoder()
+            X[col] = le.fit_transform(X[col].astype(str))
+            le_dict[col] = le
+            
+        # Latih Model XGBoost
+        model = xgb.XGBRegressor(n_estimators=100, max_depth=5, random_state=42)
+        model.fit(X, y)
+        return model, le_dict, X.columns
+
+    model_xgb, le_dict, feature_columns = train_and_prepare_model(df_clean)
+
 
 # ====================================================================
 # HALAMAN 1: DASHBOARD
@@ -56,35 +81,15 @@ if page == "Dashboard & Analisis Data":
         st.warning("Letakkan file `StudentPerformanceFactors.csv` di folder yang sama untuk mengaktifkan dashboard.")
 
 # ====================================================================
-# HALAMAN 2: FORM INPUT DATA BARU SESUAI DATASET
+# HALAMAN 2: FORM INPUT DATA BARU (SUDAH DIPERBAIKI)
 # ====================================================================
 elif page == "Form Input Data Baru":
     st.title("🔮 Prediksi Interaktif Input Data Baru")
-    st.write("Silakan masukkan data karakteristik siswa baru di bawah ini. Opsi pilihan teks otomatis diambil langsung dari nilai unik dataset.")
+    st.write("Silakan masukkan data karakteristik siswa baru di bawah ini.")
     
     if not data_loaded:
         st.error("Gagal memuat dataset. Silakan pastikan file `StudentPerformanceFactors.csv` tersedia.")
     else:
-        # Proses Training Model XGBoost di Background
-        @st.cache_resource
-        def train_model(df):
-            X = df.drop(columns=['Exam_Score'])
-            y = df['Exam_Score']
-            
-            # Buat dictionary label encoder untuk mengonversi data teks ke angka
-            le_dict = {}
-            for col in X.select_dtypes(include=['object']).columns:
-                le = LabelEncoder()
-                X[col] = le.fit_transform(X[col])
-                le_dict[col] = le
-                
-            model = xgb.XGBRegressor(n_estimators=100, max_depth=5, random_state=42)
-            model.fit(X, y)
-            return model, le_dict, X.columns
-
-        model_xgb, le_dict, feature_columns = train_model(df_clean)
-
-        # Membuat Form Input Dinamis Berdasarkan Opsi yang Ada di Dataset
         with st.form("student_form"):
             st.subheader("📝 Formulir Isian Siswa Baru")
             
@@ -108,7 +113,7 @@ elif page == "Form Input Data Baru":
                                               min_value=int(df_clean['Physical_Activity'].min()), 
                                               max_value=int(df_clean['Physical_Activity'].max()), value=3)
 
-            # --- KOLOM 2: INPUT TEKS KATEGORI (Otomatis dari Unik Dataset) ---
+            # --- KOLOM 2: INPUT TEKS KATEGORI ---
             with col2:
                 parental_involvement = st.selectbox("Parental Involvement", df_clean['Parental_Involvement'].dropna().unique())
                 access_resources = st.selectbox("Access to Resources", df_clean['Access_to_Resources'].dropna().unique())
@@ -124,44 +129,59 @@ elif page == "Form Input Data Baru":
                 peer_influence = st.selectbox("Peer Influence", df_clean['Peer_Influence'].dropna().unique())
                 learning_disabilities = st.selectbox("Learning Disabilities", df_clean['Learning_Disabilities'].dropna().unique())
                 parental_education = st.selectbox("Parental Education Level", df_clean['Parental_Education_Level'].dropna().unique())
-                # PERBAIKAN: Melengkapi baris yang terpotong
                 distance_home = st.selectbox("Distance from Home", df_clean['Distance_from_Home'].dropna().unique())
+                gender = st.selectbox("Gender", df_clean['Gender'].dropna().unique())
+                tutoring_sessions = st.number_input("Tutoring Sessions (Sesi Les Tambahan)", 
+                                                    min_value=int(df_clean['Tutoring_Sessions'].min()), 
+                                                    max_value=int(df_clean['Tutoring_Sessions'].max()), value=0)
+
+            # Tombol kirim data baru
+            submit_btn = st.form_submit_button("Hitung Prediksi Nilai")
             
-            # PERBAIKAN: Menambahkan tombol submit form agar data bisa diproses
-            submitted = st.form_submit_button("Prediksi Nilai Ujian")
-            
-        # Logika pemrosesan setelah tombol ditekan
-        if submitted:
-            # Mengumpulkan inputan ke dalam dataframe baru untuk diprediksi
-            input_data = pd.DataFrame([{
-                'Hours_Studied': hours_studied,
-                'Attendance': attendance,
-                'Parental_Involvement': parental_involvement,
-                'Access_to_Resources': access_resources,
-                'Extracurricular_Activities': extracurricular,
-                'Previous_Scores': previous_scores,
-                'Motivation_Level': motivation_level,
-                'Internet_Access': internet_access,
-                'Family_Income': family_income,
-                'Teacher_Quality': teacher_quality,
-                'School_Type': school_type,
-                'Peer_Influence': peer_influence,
-                'Physical_Activity': physical_activity,
-                'Learning_Disabilities': learning_disabilities,
-                'Parental_Education_Level': parental_education,
-                'Distance_from_Home': distance_home,
-                'Sleep_Hours': sleep_hours
-            }])
-            
-            # Menyamakan urutan kolom sesuai training data
-            input_data = input_data[feature_columns]
-            
-            # Encode data teks menggunakan encoder yang sudah dilatih sebelumnya
-            for col in input_data.select_dtypes(include=['object']).columns:
-                le = le_dict[col]
-                input_data[col] = le.transform(input_data[col])
-            
-            # Melakukan prediksi
-            prediction = model_xgb.predict(input_data)
-            
-            st.success(f"🎉 Hasil Prediksi Exam Score: **{prediction[0]:.2f}**")
+            if submit_btn:
+                # Mengumpulkan semua data baru dari form ke bentuk dict
+                new_data = {
+                    'Hours_Studied': hours_studied,
+                    'Attendance': attendance,
+                    'Parental_Involvement': parental_involvement,
+                    'Access_to_Resources': access_resources,
+                    'Extracurricular_Activities': extracurricular,
+                    'Sleep_Hours': sleep_hours,
+                    'Previous_Scores': previous_scores,
+                    'Motivation_Level': motivation_level,
+                    'Internet_Access': internet_access,
+                    'Tutoring_Sessions': tutoring_sessions,
+                    'Family_Income': family_income,
+                    'Teacher_Quality': teacher_quality,
+                    'School_Type': school_type,
+                    'Peer_Influence': peer_influence,
+                    'Physical_Activity': physical_activity,
+                    'Learning_Disabilities': learning_disabilities,
+                    'Parental_Education_Level': parental_education,
+                    'Distance_from_Home': distance_home,
+                    'Gender': gender
+                }
+                
+                # Konversi menjadi DataFrame 1 baris
+                new_df = pd.DataFrame([new_data])
+                
+                # MENGGUNAKAN ENCODER YANG SAMA KETIKA TRAINING (Mencegah Error Dimensi)
+                for col in new_df.columns:
+                    if col in le_dict:
+                        encoder = le_dict[col]
+                        # Ambil nilai teksnya
+                        val_str = str(new_df[col].values[0])
+                        # Transformasikan berdasarkan kelas yang sudah terdaftar
+                        new_df[col] = encoder.transform([val_str])[0]
+                
+                # Menyelaraskan urutan kolom agar identik dengan model saat training
+                new_df = new_df[feature_columns]
+                
+                # Menghitung Prediksi nilai dengan XGBoost
+                hasil_prediksi = model_xgb.predict(new_df)[0]
+                
+                # Tampilkan hasil akhir ke layar
+                st.markdown("---")
+                st.subheader("🎯 Hasil Estimasi Skor Nilai")
+                st.metric(label="Prediksi Exam Score Siswa Baru", value=f"{hasil_prediksi:.2f}")
+                st.success("Berhasil memproses input data baru menggunakan model regresi Kelompok 4 tanpa error!")
