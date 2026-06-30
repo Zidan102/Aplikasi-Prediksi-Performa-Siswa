@@ -110,7 +110,6 @@ elif page == "Form Input Data Baru":
 
             # --- KOLOM 2: INPUT TEKS KATEGORI (Otomatis dari Unik Dataset) ---
             with col2:
-                # Opsi diambil dari data unik teks agar tidak salah ketik
                 parental_involvement = st.selectbox("Parental Involvement", df_clean['Parental_Involvement'].dropna().unique())
                 access_resources = st.selectbox("Access to Resources", df_clean['Access_to_Resources'].dropna().unique())
                 extracurricular = st.selectbox("Extracurricular Activities", df_clean['Extracurricular_Activities'].dropna().unique())
@@ -125,4 +124,44 @@ elif page == "Form Input Data Baru":
                 peer_influence = st.selectbox("Peer Influence", df_clean['Peer_Influence'].dropna().unique())
                 learning_disabilities = st.selectbox("Learning Disabilities", df_clean['Learning_Disabilities'].dropna().unique())
                 parental_education = st.selectbox("Parental Education Level", df_clean['Parental_Education_Level'].dropna().unique())
-                distance_home = st.selectbox("Distance from Home", df_clean
+                # PERBAIKAN: Melengkapi baris yang terpotong
+                distance_home = st.selectbox("Distance from Home", df_clean['Distance_from_Home'].dropna().unique())
+            
+            # PERBAIKAN: Menambahkan tombol submit form agar data bisa diproses
+            submitted = st.form_submit_button("Prediksi Nilai Ujian")
+            
+        # Logika pemrosesan setelah tombol ditekan
+        if submitted:
+            # Mengumpulkan inputan ke dalam dataframe baru untuk diprediksi
+            input_data = pd.DataFrame([{
+                'Hours_Studied': hours_studied,
+                'Attendance': attendance,
+                'Parental_Involvement': parental_involvement,
+                'Access_to_Resources': access_resources,
+                'Extracurricular_Activities': extracurricular,
+                'Previous_Scores': previous_scores,
+                'Motivation_Level': motivation_level,
+                'Internet_Access': internet_access,
+                'Family_Income': family_income,
+                'Teacher_Quality': teacher_quality,
+                'School_Type': school_type,
+                'Peer_Influence': peer_influence,
+                'Physical_Activity': physical_activity,
+                'Learning_Disabilities': learning_disabilities,
+                'Parental_Education_Level': parental_education,
+                'Distance_from_Home': distance_home,
+                'Sleep_Hours': sleep_hours
+            }])
+            
+            # Menyamakan urutan kolom sesuai training data
+            input_data = input_data[feature_columns]
+            
+            # Encode data teks menggunakan encoder yang sudah dilatih sebelumnya
+            for col in input_data.select_dtypes(include=['object']).columns:
+                le = le_dict[col]
+                input_data[col] = le.transform(input_data[col])
+            
+            # Melakukan prediksi
+            prediction = model_xgb.predict(input_data)
+            
+            st.success(f"🎉 Hasil Prediksi Exam Score: **{prediction[0]:.2f}**")
